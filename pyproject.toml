@@ -1,0 +1,14 @@
+[project]
+name = "research-meta-model"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "jupyterlab>=4.5.6",
+    "matplotlib>=3.10.8",
+    "pandas>=3.0.1",
+    "scikit-learn>=1.8.0",
+    "tensorflow>=2.21.0",
+    "tensorflow-keras>=0.1",
+    "xgboost>=3.2.0",
+]
