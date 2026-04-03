@@ -1975,6 +1975,7 @@ dependencies = [
     { name = "pandas" },
     { name = "scikit-learn" },
     { name = "seaborn" },
+    { name = "sns" },
     { name = "tensorflow" },
     { name = "tensorflow-keras" },
     { name = "xgboost" },
@@ -1987,6 +1988,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=3.0.1" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "seaborn", specifier = ">=0.13.2" },
+    { name = "sns", specifier = ">=0.1" },
     { name = "tensorflow", specifier = ">=2.21.0" },
     { name = "tensorflow-keras", specifier = ">=0.1" },
     { name = "xgboost", specifier = ">=3.2.0" },
@@ -2264,6 +2266,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
 ]
+
+[[package]]
+name = "sns"
+version = "0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/58/80/d5a2a12fae635474014e7e0c88959daab3bf815648250fbb7639dd02fe50/sns-0.1.tar.gz", hash = "sha256:2d847d23eb8e0ea20054dbadabdecfafc529e4c7a16a6ce70205c4bf8ebc6cf4", size = 2089, upload-time = "2015-08-11T20:00:35.35Z" }
 
 [[package]]
 name = "soupsieve"
