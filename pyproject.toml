@@ -8,6 +8,7 @@ dependencies = [
     "matplotlib>=3.10.8",
     "pandas>=3.0.1",
     "scikit-learn>=1.8.0",
+    "scipy-stubs~=1.17.1",
     "seaborn>=0.13.2",
     "sns>=0.1",
     "tensorflow>=2.21.0",
