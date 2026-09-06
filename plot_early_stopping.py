@@ -19,15 +19,18 @@ RESULTS_DIR = "results"
 plt.rcParams.update({"figure.dpi": 110, "font.size": 10, "axes.grid": True,
                      "grid.alpha": 0.3, "axes.axisbelow": True})
 
-COL = {"early": "#666666", "smart_trend": "#1f77b4", "smart_rnn": "#d62728", "param": "#2ca02c"}
-MRK = {"early": "o", "smart_trend": "s", "smart_rnn": "^", "param": "D"}
+COL = {"early": "#666666", "smart_trend": "#1f77b4", "smart_rnn": "#d62728",
+       "smart_meta": "#9467bd", "param": "#2ca02c"}
+MRK = {"early": "o", "smart_trend": "s", "smart_rnn": "^", "smart_meta": "P", "param": "D"}
 # Обобщённые метки: не привязаны к конкретному механизму прогноза. На ветке
 # main «умная» стратегия одна (smart_trend), поэтому она подписана просто
-# «Smart»; smart_rnn встречается только там, где включён RNN-прогноз.
-LBL = {"early": "Early stopping", "smart_trend": "Smart",
-       "smart_rnn": "Smart", "param": "Parametric"}
-SHORT = {"early": "early", "smart_trend": "smart", "smart_rnn": "smart", "param": "param"}
-STRATS = ["early", "smart_trend", "smart_rnn", "param"]
+# «Smart»; smart_rnn / smart_meta встречаются только там, где включён
+# соответствующий прогнозист (GRU / табличный GBM, вариант C).
+LBL = {"early": "Early stopping", "smart_trend": "Smart (trend)",
+       "smart_rnn": "Smart (RNN)", "smart_meta": "Smart (GBM)", "param": "Parametric"}
+SHORT = {"early": "early", "smart_trend": "smart", "smart_rnn": "s-rnn",
+         "smart_meta": "s-gbm", "param": "param"}
+STRATS = ["early", "smart_trend", "smart_rnn", "smart_meta", "param"]
 
 # Прогнозисты кривой для fig4/fig5: (цвет, маркер, подпись).
 FC_STYLE = {
@@ -112,7 +115,7 @@ def fig_sweep(D, out):
     for j, t in enumerate(tasks):
         sub = df[df.task == t]
         early = sub[sub.strat == "early"].iloc[0]
-        for strat in [s for s in ("smart_trend", "smart_rnn") if s in set(sub.strat.unique())]:
+        for strat in [s for s in ("smart_trend", "smart_rnn", "smart_meta") if s in set(sub.strat.unique())]:
             d = sub[sub.strat == strat].sort_values("penalty")
             ax[0, j].plot(d.penalty, d.ep, "o-", color=COL[strat], label=LBL[strat])
             ax[1, j].plot(d.penalty, d.gap, "o-", color=COL[strat], label=LBL[strat])

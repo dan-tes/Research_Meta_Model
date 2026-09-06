@@ -10,11 +10,20 @@
 | `SmartEarlyStoppingMultiStep` | прогнозирует ближайший кусок кривой val_loss и стопает, когда ожидаемое относительное улучшение за горизонт меньше `epoch_penalty · future_steps` |
 | `ParametricEarlyStopping` | то же правило, но прогноз — фит экспоненты `a·e^(−bt)+c` |
 
-В этой ветке `SmartEarlyStoppingMultiStep` прогнозирует так (по убыванию приоритета):
-`_forecast_meta` (табличная модель, **сломана**, по умолчанию выкл) → `_forecast_trend`
-(линейная экстраполяция по окну из 6 эпох, **дефолт и фактически единственный рабочий путь**).
-RNN-прогноз кривой (`_forecast_rnn`, GRU) живёт в отдельной ветке с прогнозистом; здесь его нет,
-поэтому «умная» стратегия одна — `smart_trend`, в графиках подписана просто **Smart**.
+В этой ветке `SmartEarlyStoppingMultiStep` решает об остановке так:
+- **`smart_trend`** (дефолт) — линейная экстраполяция val_loss по окну из 6 эпох,
+  `projected = min(последнее, экстраполяция)`, `rel_gain = (best − projected) / best`.
+- **`smart_meta`** (`use_meta=True`, **вариант C**) — табличный GBM из
+  `meta_forecaster.py` предсказывает `rel_gain` НАПРЯМУЮ: «сколько относительного
+  улучшения val_loss ещё доступно за следующие 10 эпох». Модель обучена на
+  кривых из этого же пайплайна (`gen_curves.py`), а не из `final.csv`, и на
+  прямом таргете, а не на одношаговой дельте с авторегрессией. Включается, только
+  если обучен `models/meta_forecaster.pkl`; иначе — тихий откат на тренд.
+
+Старый сломанный `_forecast_meta` (final.csv + одношаговая дельта + авторегрессия,
+систематически предсказывал «≈0» на свежих кривых) удалён — его заменил
+`_forecast_meta_gain`. RNN-прогноз кривой (`_forecast_rnn`, GRU) живёт в отдельной
+ветке с прогнозистом; здесь его нет.
 
 **Текущий вывод бенчмарка:** на held-out задачах `SimpleEarlyStopping(patience=5)` держится
 вплотную к oracle; «умные» стратегии (`smart_trend`, `param`) — это размен эпох на качество.
@@ -29,7 +38,8 @@ RNN-прогноз кривой (`_forecast_rnn`, GRU) живёт в отдел�
 | `pytorch_version.py` | стратегии остановки + `EPOCH_PENALTY` + модели/лоадеры |
 | `curve_forecaster.py` | GRU-прогнозист кривой: модель, препроцессинг, `load_forecaster`. **В решении об остановке на этой ветке не участвует**; нужен только для `rnn`-колонки в fig4/fig5, если она включена |
 | `train_curve_forecaster.py` | обучение прогнозиста → `models/curve_forecaster.pt` (нужно только для RNN-ветки) |
-| `gen_curves.py` | генерация датасетов кривых → `data/curves_{train,eval}.jsonl`. На этой ветке в `data/` есть не все задачи из `TRAIN_TASKS`/`EVAL_TASKS` |
+| `gen_curves.py` | генерация датасетов кривых → `data/curves_{train,eval}.jsonl`. `N_PER_TASK` (дефолт 100, env-переопределяемо) кривых на задачу; 8 train-задач → ~800 кривых для варианта C |
+| `meta_forecaster.py` | **вариант C**: табличный GBM-прогнозист. Строит из кривых пары `(фичи префикса → таргет)`, где таргет — `relgain` (ещё доступное относит. улучшение за 10 эпох) и `plateau` (эпох до плато). `train` → `models/meta_forecaster.pkl`, `eval` — held-out метрики + сравнение с линейным трендом |
 | `eval_early_stopping.py` | бенчмарк стратегий → `results/*.csv`, `results/example_curves.json` |
 | `plot_early_stopping.py` | отрисовка → `results/fig1..5*.png` |
 | `test.py` | старый бенчмарк на MNIST/CIFAR/Wine (`runner_pytorch` / `analyze_results`) |
@@ -37,18 +47,25 @@ RNN-прогноз кривой (`_forecast_rnn`, GRU) живёт в отдел�
 ## Пайплайн
 
 ```
-gen_curves.py              # 1. кривые обучения (train / eval — непересекающиеся задачи)   [опц.]
-   ↓  data/curves_train.jsonl, data/curves_eval.jsonl
-train_curve_forecaster.py  # 2. обучить GRU-прогнозист (только для RNN-ветки)              [опц.]
+gen_curves.py              # 1. кривые обучения (train / eval — непересекающиеся задачи)
+   ↓  data/curves_train.jsonl (~800), data/curves_eval.jsonl (~300)
+meta_forecaster.py train    # 2. обучить табличный GBM-прогнозист (вариант C)
+   ↓  models/meta_forecaster.pkl
+train_curve_forecaster.py  # 2b. обучить GRU-прогнозист (только для RNN-ветки)             [опц.]
    ↓  models/curve_forecaster.pt
-eval_early_stopping.py      # 3. прогнать стратегии (early / smart_trend / param), метрики
+eval_early_stopping.py      # 3. прогнать стратегии (early / smart_trend / smart_meta / param)
    ↓  results/*.csv, results/example_curves.json
 plot_early_stopping.py      # 4. нарисовать графики
    ↓  results/fig1..5.png
 ```
 
-Шаги 1–2 на этой ветке не нужны для решения об остановке: `data/curves_eval.jsonl` уже
-лежит и используется только для fig4 (точность прогноза). Обычный цикл — 3–4.
+Для `smart_meta` нужны шаги 1–2 (иначе стратегия тихо откатывается на тренд и
+не попадает в бенчмарк). `smart_trend` / `param` работают без них.
+
+```bash
+N_PER_TASK=100 python gen_curves.py     # ~20-40 мин на GPU
+python meta_forecaster.py               # train + held-out eval, секунды
+```
 
 ```bash
 python eval_early_stopping.py            # ~4 мин на GPU
@@ -111,13 +128,28 @@ python plot_early_stopping.py --only fig3 fig5
 кривым. Сохраняется лучший по val чекпойнт в `models/curve_forecaster.pt`.
 
 ### …пересобрать датасет кривых
-`python gen_curves.py` → `data/curves_train.jsonl` (из `TRAIN_TASKS`) и
-`data/curves_eval.jsonl` (из `EVAL_TASKS`). `configs_for` задаёт сетку
-гиперпараметров на задачу (`widths/lrs/wds/drops/sizes/noises`, обрезается до
-`combos[:34]`). `run_curve` гоняет один MLP `max_epochs=140` и пишет
-`val_loss` + `val_metric` по эпохам. Одна кривая ≈ 5 с на GPU.
+`N_PER_TASK=100 python gen_curves.py` → `data/curves_train.jsonl` (из
+`TRAIN_TASKS`) и `data/curves_eval.jsonl` (из `EVAL_TASKS`). `configs_for` задаёт
+сетку гиперпараметров на задачу (`widths/lrs/wds/drops/sizes/noises`); если
+комбинаций меньше, чем `N_PER_TASK`, они добираются повторами с новым seed.
+`run_curve` гоняет один MLP `max_epochs=140` и пишет `val_loss` + `val_metric`
+по эпохам. Одна кривая ≈ 1–2 с на GPU.
 **KMNIST/CIFAR-100 выпали** — мёртвые/медленные зеркала; если чинить — добавь
 обратно в `EVAL_TASKS` и убедись, что скачивание проходит.
+
+### …табличный GBM-прогнозист (вариант C)
+`meta_forecaster.py`:
+- `PREFIX_MIN` (5), `HORIZON` (10) — окно префикса и горизонт таргета `relgain`.
+  Меняешь → **переобучить** (`python meta_forecaster.py train`). `HORIZON` должен
+  совпадать с тем, на что умножается `epoch_penalty` в `smart_meta`
+  (`SmartEarlyStoppingMultiStep` берёт `meta_horizon` из конфига `.pkl`).
+- `FEATURES` — список признаков префикса; правишь → правь `features_from_prefix`.
+- `MODEL_KIND` — `"hgb"` (sklearn `HistGradientBoostingRegressor`) или `"xgb"`
+  (если установлен `xgboost`). Архитектура именно градиентный бустинг.
+- Таргеты в `_targets_at`: `relgain` (для решения об остановке) и `plateau`
+  (эпох до плато, `PLATEAU_EPS`/`PLATEAU_CAP`).
+- `evaluate()` меряет на `data/curves_eval.jsonl` (held-out задачи) и сравнивает
+  с линейным трендом — тем же, что в `smart_trend`.
 
 ### …параметры бенчмарка
 `eval_early_stopping.py`, блок «КОНФИГ»: `PENALTY`, `FULL_EPOCHS`, `MLP`
@@ -134,7 +166,7 @@ python plot_early_stopping.py --only fig3 fig5
 |---|---|---|
 | `fig1_vs_size` | `bench_vs_size.csv` | эпохи и итоговое качество каждой стратегии vs `train_size`, пунктир — oracle |
 | `fig2_tradeoff` | `bench_vs_size.csv` | scatter «эпохи ↔ разрыв до oracle», идеал — левый-верх |
-| `fig3_sweep` | `holdout_sweep.csv` | как `EPOCH_PENALTY` двигает компромисс `smart_trend` на held-out, early — референс |
+| `fig3_sweep` | `holdout_sweep.csv` | как `EPOCH_PENALTY` двигает компромисс `smart_trend` / `smart_meta` на held-out, early — референс |
 | `fig4_forecast` | `forecast_mae.csv` | rel-MAE прогноза кривой по горизонту на held-out: текущий метод (линейный тренд) vs параметрический (exp-fit) |
 | `fig5_examples` | `example_curves.json` | примеры кривых: прогнозы обоих методов из точки решения + вертикали, где остановилась каждая стратегия (подписи снизу у оси X) |
 
@@ -152,7 +184,11 @@ python plot_early_stopping.py --only fig3 fig5
   сходится к ~10-й эпохе.
 - **`oracle`** в CSV = метрика на лучшем по val_loss чекпойнте за полный прогон
   без остановки (`strat="none"`, `FULL_EPOCHS`), а не `max(val_metric)`.
-- Табличная мета-модель (`_forecast_meta`, `benchmark_sklearn_models` на
-  `final.csv`) systematically прогнозирует «изменений ≈ 0» на свежих кривых →
-  остановка всегда на полу. Выключена (`use_meta=False`). Не включать без
-  переобучения на правильном таргете.
+- **Старая** табличная мета-модель (`_forecast_meta` на `final.csv`, одношаговая
+  дельта + авторегрессия) systematically прогнозировала «изменений ≈ 0» на свежих
+  кривых → остановка всегда на полу. Удалена. Вариант C (`meta_forecaster.py`,
+  `smart_meta`) — её замена: те же деревья, но данные из `gen_curves.py` и прямой
+  таргет `relgain`. `use_meta=True` без обученного `.pkl` = тихий откат на тренд.
+- **`smart_meta` в бенчмарке появляется только если есть `models/meta_forecaster.pkl`.**
+  `eval_early_stopping.py` проверяет это (`_SMART_HAS_META`); нет файла — колонки
+  `smart_meta` в CSV/графиках не будет.

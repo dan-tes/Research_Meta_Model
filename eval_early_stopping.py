@@ -42,9 +42,19 @@ FULL_EPOCHS = 140         # длина «полного» прогона (для
 _SMART_HAS_RNN = "use_rnn" in inspect.signature(
     SmartEarlyStoppingMultiStep.__init__).parameters
 
-STRATS = ("early", "smart_trend", "smart_rnn", "param") if _SMART_HAS_RNN \
-    else ("early", "smart_trend", "param")
-SWEEP_SMART = ("smart_trend", "smart_rnn") if _SMART_HAS_RNN else ("smart_trend",)
+# Вариант C: табличный GBM-прогнозист. Участвует в бенчмарке только если обучен
+# (models/meta_forecaster.pkl есть) и в ядре есть параметр use_meta.
+_SMART_HAS_META = ("use_meta" in inspect.signature(
+    SmartEarlyStoppingMultiStep.__init__).parameters
+    and os.path.exists("models/meta_forecaster.pkl"))
+
+STRATS = tuple(s for s, ok in (
+    ("early", True), ("smart_trend", True),
+    ("smart_rnn", _SMART_HAS_RNN), ("smart_meta", _SMART_HAS_META),
+    ("param", True)) if ok)
+SWEEP_SMART = tuple(s for s, ok in (
+    ("smart_trend", True), ("smart_rnn", _SMART_HAS_RNN),
+    ("smart_meta", _SMART_HAS_META)) if ok)
 
 # базовые гиперпараметры MLP, на котором меряем стратегии
 MLP = dict(width=64, depth=2, wd=1e-4, dropout=0.2, lr=1e-3)
@@ -127,6 +137,8 @@ def _callback(strat, penalty):
         return ParametricEarlyStopping(epoch_penalty=penalty)
     if strat == "smart_rnn" and _SMART_HAS_RNN:
         return SmartEarlyStoppingMultiStep(epoch_penalty=penalty, use_rnn=True)
+    if strat == "smart_meta" and _SMART_HAS_META:
+        return SmartEarlyStoppingMultiStep(epoch_penalty=penalty, use_meta=True)
     return SmartEarlyStoppingMultiStep(epoch_penalty=penalty)
 
 

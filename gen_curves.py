@@ -11,6 +11,7 @@ val_metric = accuracy (классификация) или R^2 (регресси�
 """
 import itertools
 import json
+import os
 import time
 
 import numpy as np
@@ -163,10 +164,17 @@ def run_curve(data, cfg, max_epochs, bs=64):
     return vl_curve, vm_curve
 
 
+# сколько кривых на задачу (можно переопределить: N_PER_TASK=120 python gen_curves.py).
+# Вариант C (табличный GBM-прогнозист) хочет 500-2000 кривых из этого же пайплайна,
+# поэтому дефолт поднят с исходных 34: 8 train-задач * 100 = 800 обучающих кривых.
+N_PER_TASK = int(os.environ.get("N_PER_TASK", "100"))
+
+
 # ----------------------------------------------------------------- перебор
-def configs_for(is_clf, n_samples):
-    widths = [(16, 1), (64, 2), (256, 2)]
-    lrs = [3e-3, 1e-3, 3e-4]
+def configs_for(is_clf, n_samples, n_curves=None):
+    n_curves = n_curves or N_PER_TASK
+    widths = [(16, 1), (64, 2), (128, 2), (256, 3)]
+    lrs = [5e-3, 3e-3, 1e-3, 5e-4, 3e-4]
     wds = [0.0, 1e-3]
     drops = [0.0, 0.3]
     sizes = [s for s in [300, 800, 2000, 6000] if s <= int(0.9 * n_samples)] or [int(0.7 * n_samples)]
@@ -174,7 +182,9 @@ def configs_for(is_clf, n_samples):
     combos = list(itertools.product(widths, lrs, wds, drops, sizes, noises))
     rng = np.random.default_rng(0)
     rng.shuffle(combos)
-    combos = combos[:34]                      # ~34 кривых на задачу
+    # если комбинаций меньше, чем нужно кривых, добираем повторами с новым seed
+    reps = -(-n_curves // len(combos))
+    combos = (combos * reps)[:n_curves]
     out = []
     for (w, dep), lr, wd, dr, ts, nz in combos:
         out.append(dict(width=w, depth=dep, lr=lr, wd=wd, dropout=dr,

@@ -301,7 +301,8 @@ class SmartEarlyStoppingMultiStep:
 
     def __init__(self, model_meta=None, train_size=None, future_steps=5,
                  min_epochs=10, patience=2, epoch_penalty=EPOCH_PENALTY,
-                 forecast_window=6, restore_best_weights=True, use_meta=False):
+                 forecast_window=6, restore_best_weights=True, use_meta=False,
+                 meta_path="models/meta_forecaster.pkl"):
         self.model_meta = model_meta
         self.train_size = train_size
         self.future_steps = future_steps
@@ -310,12 +311,21 @@ class SmartEarlyStoppingMultiStep:
         self.epoch_penalty = epoch_penalty
         self.forecast_window = forecast_window
         self.restore_best_weights = restore_best_weights
-        # Мета-модель из final.csv обучена на почти сошедшихся кривых и на свежей
-        # быстро падающей кривой систематически предсказывает "изменений ~0",
-        # из-за чего остановка всегда срабатывает на min_epochs. Поэтому по
-        # умолчанию используется устойчивый линейный тренд; мета-путь включается
-        # явно через use_meta=True (и только если модель действительно передана).
-        self.use_meta = use_meta and model_meta is not None
+        # Вариант C: табличный GBM-прогнозист из meta_forecaster.py, обученный на
+        # кривых ИЗ ЭТОГО ЖЕ пайплайна (gen_curves.py) и предсказывающий НАПРЯМУЮ
+        # ещё доступное относительное улучшение за горизонт (а не одношаговую
+        # дельту с авторегрессией, как сломанная модель на final.csv). Включается
+        # явно через use_meta=True; при отсутствии .pkl тихо откатываемся на тренд.
+        self.meta = None
+        self.meta_horizon = None
+        if use_meta:
+            try:
+                import meta_forecaster as MF
+                self.meta = MF.load_meta(meta_path)
+                self.meta_horizon = self.meta["config"].get("horizon", 10)
+            except Exception:
+                self.meta = None
+        self.use_meta = self.meta is not None
 
         self.val_loss = []
         self.best_val_loss = np.inf
@@ -335,12 +345,15 @@ class SmartEarlyStoppingMultiStep:
         if len(self.val_loss) < self.min_epochs:
             return False
 
-        preds = self._forecast()
-        projected = min([self.val_loss[-1], *preds])
-
-        denom = max(self.best_val_loss, 1e-8)
-        rel_gain = (self.best_val_loss - projected) / denom      # ещё доступное улучшение
-        budget = self.epoch_penalty * self.future_steps          # сколько мы готовы "заплатить"
+        if self.use_meta:
+            rel_gain = self._forecast_meta_gain()                # прямой прогноз GBM
+            budget = self.epoch_penalty * self.meta_horizon      # горизонт GBM (10)
+        else:
+            preds = self._forecast()
+            projected = min([self.val_loss[-1], *preds])
+            denom = max(self.best_val_loss, 1e-8)
+            rel_gain = (self.best_val_loss - projected) / denom  # ещё доступное улучшение
+            budget = self.epoch_penalty * self.future_steps      # сколько мы готовы "заплатить"
 
         if rel_gain < budget:
             self.counter += 1
@@ -357,11 +370,6 @@ class SmartEarlyStoppingMultiStep:
     # Прогноз будущих значений
     # ------------------------------------------------------------------
     def _forecast(self):
-        if self.use_meta:
-            try:
-                return self._forecast_meta()
-            except Exception:
-                pass
         return self._forecast_trend()
 
     def _forecast_trend(self):
@@ -383,19 +391,19 @@ class SmartEarlyStoppingMultiStep:
             preds[:] = yr[-1]
         return preds.tolist()
 
-    def _forecast_meta(self):
-        """Авторегрессионный прогноз с помощью мета-модели (предсказывает
-        относительное изменение loss на следующий шаг)."""
-        val = list(self.val_loss)
-        preds = []
-        for _ in range(self.future_steps):
-            row = self._meta_features(np.asarray(val, dtype=np.float32))
-            X_np = pd.DataFrame([row])[feature_order].to_numpy(dtype=np.float32)
-            pred_delta = float(self.model_meta.predict(X_np)[0])
-            next_val = max(val[-1] * (1.0 + pred_delta), 0.0)
-            preds.append(next_val)
-            val.append(next_val)
-        return preds
+    def _forecast_meta_gain(self):
+        """Вариант C: табличный GBM напрямую оценивает ещё доступное
+        относительное улучшение val_loss за meta_horizon эпох по признакам
+        текущего префикса. При сбое — откат на линейный тренд."""
+        try:
+            import meta_forecaster as MF
+            feats = MF.features_from_prefix(np.asarray(self.val_loss, dtype=np.float64))
+            row = pd.DataFrame([feats])[self.meta["features"]].astype(np.float64)
+            return float(np.clip(self.meta["relgain"].predict(row)[0], 0.0, 1.0))
+        except Exception:
+            preds = self._forecast_trend()
+            projected = min([self.val_loss[-1], *preds])
+            return (self.best_val_loss - projected) / max(self.best_val_loss, 1e-8)
 
     @staticmethod
     def _meta_features(val_np):
