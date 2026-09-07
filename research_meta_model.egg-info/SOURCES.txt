@@ -1,6 +1,0 @@
-README.md
-pyproject.toml
-research_meta_model.egg-info/PKG-INFO
-research_meta_model.egg-info/SOURCES.txt
-research_meta_model.egg-info/dependency_links.txt
-research_meta_model.egg-info/top_level.txt

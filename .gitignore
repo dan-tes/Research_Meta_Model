@@ -1,2 +1,16 @@
+# Python
 __pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+python3.12/
+
+# IDE
+.idea/
+
+# Data
 data/FashionMNIST/
