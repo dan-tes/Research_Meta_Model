@@ -19,24 +19,22 @@ RESULTS_DIR = "results"
 plt.rcParams.update({"figure.dpi": 110, "font.size": 10, "axes.grid": True,
                      "grid.alpha": 0.3, "axes.axisbelow": True})
 
-COL = {"early": "#666666", "smart_trend": "#1f77b4", "smart_rnn": "#d62728",
+COL = {"early": "#666666", "smart_trend": "#1f77b4",
        "smart_meta": "#9467bd", "param": "#2ca02c"}
-MRK = {"early": "o", "smart_trend": "s", "smart_rnn": "^", "smart_meta": "P", "param": "D"}
-# Обобщённые метки: не привязаны к конкретному механизму прогноза. На ветке
-# main «умная» стратегия одна (smart_trend), поэтому она подписана просто
-# «Smart»; smart_rnn / smart_meta встречаются только там, где включён
-# соответствующий прогнозист (GRU / табличный GBM, вариант C).
+MRK = {"early": "o", "smart_trend": "s", "smart_meta": "P", "param": "D"}
+# Обобщённые метки: не привязаны к конкретному механизму прогноза. «Умная»
+# стратегия по линейному тренду подписана просто «Smart»; smart_meta
+# встречается только там, где обучен табличный GBM-прогнозист (вариант C).
 LBL = {"early": "Early stopping", "smart_trend": "Smart (trend)",
-       "smart_rnn": "Smart (RNN)", "smart_meta": "Smart (GBM)", "param": "Parametric"}
-SHORT = {"early": "early", "smart_trend": "smart", "smart_rnn": "s-rnn",
+       "smart_meta": "Smart (GBM)", "param": "Parametric"}
+SHORT = {"early": "early", "smart_trend": "smart",
          "smart_meta": "s-gbm", "param": "param"}
-STRATS = ["early", "smart_trend", "smart_rnn", "smart_meta", "param"]
+STRATS = ["early", "smart_trend", "smart_meta", "param"]
 
 # Прогнозисты кривой для fig4/fig5: (цвет, маркер, подпись).
 FC_STYLE = {
     "trend": (COL["smart_trend"], "s", "линейный тренд (текущий)"),
     "param": (COL["param"], "D", "параметрический (exp-fit)"),
-    "rnn": (COL["smart_rnn"], "o", "RNN"),
 }
 
 
@@ -115,7 +113,7 @@ def fig_sweep(D, out):
     for j, t in enumerate(tasks):
         sub = df[df.task == t]
         early = sub[sub.strat == "early"].iloc[0]
-        for strat in [s for s in ("smart_trend", "smart_rnn", "smart_meta", "param") if s in set(sub.strat.unique())]:
+        for strat in [s for s in ("smart_trend", "smart_meta", "param") if s in set(sub.strat.unique())]:
             d = sub[sub.strat == strat].sort_values("penalty")
             ax[0, j].plot(d.penalty, d.ep, "o-", color=COL[strat], label=LBL[strat])
             ax[1, j].plot(d.penalty, d.gap, "o-", color=COL[strat], label=LBL[strat])
@@ -136,7 +134,7 @@ def fig_sweep(D, out):
 
 def fig_forecast(D, out):
     df = pd.read_csv(f"{D}/forecast_mae.csv")
-    methods = [m for m in ("trend", "param", "rnn") if m in df.columns]
+    methods = [m for m in ("trend", "param") if m in df.columns]
     g = df.groupby(["task", "horizon"])[methods].mean().reset_index()
     tasks = sorted(g.task.unique())
     fig, ax = plt.subplots(1, len(tasks), figsize=(4.2 * len(tasks), 3.8), squeeze=False)
@@ -163,7 +161,7 @@ def fig_examples(D, out):
         lo, hi = vl.min(), vl.max(); pad = (hi - lo) * 0.12
         a.plot(ep, vl, color="#222", lw=1.8, label="val_loss (факт, полный прогон)")
         kf = e["forecast_at"]
-        for key in ("trend_fc", "param_fc", "rnn_fc"):
+        for key in ("trend_fc", "param_fc"):
             if key not in e:
                 continue
             color, mk, lbl = FC_STYLE[key[:-3]]

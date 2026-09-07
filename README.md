@@ -228,15 +228,12 @@ GBM (как и тренд) там вдвое лучше. Собственное 
 
 | файл | назначение |
 |---|---|
-| [pytorch_version.py](pytorch_version.py) | стратегии остановки (`SimpleEarlyStopping`, `SmartEarlyStoppingMultiStep`, `ParametricEarlyStopping`), `EPOCH_PENALTY`, модели/лоадеры |
+| [pytorch_version.py](pytorch_version.py) | три класса стратегий остановки (`SimpleEarlyStopping`, `SmartEarlyStoppingMultiStep`, `ParametricEarlyStopping`) + `EPOCH_PENALTY` |
 | [meta_forecaster.py](meta_forecaster.py) | **вариант C**: табличный GBM-прогнозист `relgain`/`plateau`. `train` → `.pkl`, `eval` → held-out метрики + сравнение с трендом |
 | [gen_curves.py](gen_curves.py) | генерация датасета кривых обучения (train/eval — непересекающиеся задачи) |
 | [eval_early_stopping.py](eval_early_stopping.py) | бенчмарк стратегий → `results/*.csv`, `example_curves.json` |
 | [plot_early_stopping.py](plot_early_stopping.py) | отрисовка `results/fig1..7.png` |
 | [analyze_regime.py](analyze_regime.py) | симуляция стратегий на held-out кривых → `results/regime.csv`, `fig8` — разбор по объёму данных и «резкости» кривой |
-| [curve_forecaster.py](curve_forecaster.py) / [train_curve_forecaster.py](train_curve_forecaster.py) | GRU-прогнозист кривой (вариант A). На этой ветке в решении об остановке **не участвует**; используется только для колонки `rnn` в fig4/fig5, если её включить |
-| [test.py](test.py) / [djks.py](djks.py) | старый бенчмарк на MNIST/CIFAR/Wine поверх `pytorch_version` |
-| [regressions_use_extra_tree.ipynb](regressions_use_extra_tree.ipynb), `rnn*.ipynb` | ноутбуки-черновики предыдущих итераций |
 | `data/curves_{train,eval}.jsonl` | датасеты кривых |
 | `models/meta_forecaster.pkl` | обученный GBM-прогнозист (вариант C) |
 | `results/` | CSV бенчмарка + PNG-графики |
@@ -285,7 +282,7 @@ python plot_early_stopping.py
 
 | что | где | сейчас |
 |---|---|---|
-| агрессивность остановки | `EPOCH_PENALTY` в [pytorch_version.py](pytorch_version.py) (дефолт классов, `test.py`); в бенчмарке — `PENALTY_BY_STRAT` в [eval_early_stopping.py](eval_early_stopping.py) | trend `0.006` · meta `0.003` · param `0.010` |
+| агрессивность остановки | `EPOCH_PENALTY` в [pytorch_version.py](pytorch_version.py) (дефолт классов); в бенчмарке — `PENALTY_BY_STRAT` в [eval_early_stopping.py](eval_early_stopping.py) | trend `0.006` · meta `0.003` · param `0.010` |
 | жёсткий пол / patience «умной» | `min_epochs`, `patience` в `SmartEarlyStoppingMultiStep.__init__` | `10`, `2` |
 | окно/горизонт линейного тренда | `forecast_window`, `future_steps` там же | `6`, `5` |
 | горизонт GBM-таргета `relgain` | `HORIZON` в [meta_forecaster.py](meta_forecaster.py) — **при смене переобучить**, должен совпадать с множителем `epoch_penalty` в `smart_meta` | `10` |
@@ -300,7 +297,7 @@ python plot_early_stopping.py
 ## Готчи
 
 * **held-out дисциплина.** `data/curves_eval.jsonl` / `EVAL_TASKS` не должны
-  пересекаться с `curves_train.jsonl` / `TRAIN_TASKS` / `final.csv` — иначе оценка
+  пересекаться с `curves_train.jsonl` / `TRAIN_TASKS` — иначе оценка
   прогнозиста завышена.
 * **CIFAR в бенчмарке — это MLP на `flatten(3072)`**, не CNN. Форма кривых
   реалистична, абсолютная accuracy низкая — это ок, меряем стратегию остановки.

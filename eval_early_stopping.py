@@ -24,9 +24,12 @@ import torch.nn as nn
 import torch.optim as optim
 
 import gen_curves as G
-from curve_forecaster import HORIZON, MIN_PREFIX, load_forecaster, prefix_to_input
 from pytorch_version import (ParametricEarlyStopping, SimpleEarlyStopping,
                              SmartEarlyStoppingMultiStep)
+
+# горизонт/минимальный префикс для оценки многошагового прогноза кривой
+HORIZON = 10
+MIN_PREFIX = 5
 
 # ------------------------------------------------------------------ КОНФИГ
 RESULTS_DIR = "results"
@@ -54,13 +57,6 @@ PENALTY = 0.006          # дефолт для стратегий вне таб�
 def penalty_for(strat):
     return PENALTY_BY_STRAT.get(strat, PENALTY)
 
-# Поддерживает ли текущая версия SmartEarlyStoppingMultiStep RNN-прогноз для
-# решения об остановке. В ветке main этого пути нет — там «умная» стратегия
-# всегда одна (линейный тренд), поэтому отдельную запись smart_rnn не гоняем:
-# она была бы точной копией smart_trend.
-_SMART_HAS_RNN = "use_rnn" in inspect.signature(
-    SmartEarlyStoppingMultiStep.__init__).parameters
-
 # Вариант C: табличный GBM-прогнозист. Участвует в бенчмарке только если обучен
 # (models/meta_forecaster.pkl есть) и в ядре есть параметр use_meta.
 _SMART_HAS_META = ("use_meta" in inspect.signature(
@@ -69,10 +65,9 @@ _SMART_HAS_META = ("use_meta" in inspect.signature(
 
 STRATS = tuple(s for s, ok in (
     ("early", True), ("smart_trend", True),
-    ("smart_rnn", _SMART_HAS_RNN), ("smart_meta", _SMART_HAS_META),
-    ("param", True)) if ok)
+    ("smart_meta", _SMART_HAS_META), ("param", True)) if ok)
 SWEEP_SMART = tuple(s for s, ok in (
-    ("smart_trend", True), ("smart_rnn", _SMART_HAS_RNN),
+    ("smart_trend", True),
     ("smart_meta", _SMART_HAS_META), ("param", True)) if ok)
 
 # базовые гиперпараметры MLP, на котором меряем стратегии
@@ -101,15 +96,6 @@ SWEEP_CFGS = [dict(lr=lr, seed=s) for lr in (1e-3, 3e-4) for s in (0, 1)]
 
 EXAMPLE_TASKS = ("MNIST", "CIFAR10", "Wine")  # для fig5
 
-_rnn = None
-
-
-def rnn():
-    global _rnn
-    if _rnn is None:
-        _rnn = load_forecaster(device="cpu")
-    return _rnn
-
 
 # ------------------------------------------------------------------ прогнозы
 def trend_fc(hist, horizon=HORIZON, window=6):
@@ -119,13 +105,6 @@ def trend_fc(hist, horizon=HORIZON, window=6):
     if s >= 0:
         p[:] = yr[-1]
     return p
-
-
-def rnn_fc(hist, horizon=HORIZON):
-    x, lengths, v0 = prefix_to_input(hist)
-    with torch.no_grad():
-        pn = rnn()(x, lengths).squeeze(0).numpy()
-    return np.clip(pn * v0, 0.0, None)[:horizon]
 
 
 def param_fc(hist, horizon=HORIZON):
@@ -160,8 +139,6 @@ def _callback(strat, penalty):
         return SimpleEarlyStopping(patience=5)
     if strat == "param":
         return ParametricEarlyStopping(epoch_penalty=penalty)
-    if strat == "smart_rnn" and _SMART_HAS_RNN:
-        return SmartEarlyStoppingMultiStep(epoch_penalty=penalty, use_rnn=True)
     if strat == "smart_meta" and _SMART_HAS_META:
         return SmartEarlyStoppingMultiStep(epoch_penalty=penalty, use_meta=True)
     return SmartEarlyStoppingMultiStep(epoch_penalty=penalty)
@@ -278,11 +255,8 @@ def forecast_mae(path="data/curves_eval.jsonl"):
     Сравнивает прогнозисты, которые реально используют стратегии остановки:
     `trend` — текущий метод SmartEarlyStoppingMultiStep (линейная экстраполяция),
     `param` — метод ParametricEarlyStopping (фит экспоненты).
-    `rnn` добавляется только если в ядре есть RNN-путь (ветка с прогнозистом).
     """
     methods = {"trend": trend_fc, "param": param_fc}
-    if _SMART_HAS_RNN:
-        methods["rnn"] = rnn_fc
     rows = []
     for line in open(path):
         r = json.loads(line)
@@ -312,8 +286,6 @@ def example_curves():
                    stops=stops, forecast_at=kf,
                    trend_fc=list(map(float, trend_fc(vl[:kf]))),
                    param_fc=list(map(float, param_fc(vl[:kf]))))
-        if _SMART_HAS_RNN:
-            rec["rnn_fc"] = list(map(float, rnn_fc(vl[:kf])))
         out.append(rec)
     return out
 
