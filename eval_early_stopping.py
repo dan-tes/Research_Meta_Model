@@ -1,7 +1,8 @@
 """Бенчмарк стратегий ранней остановки + подготовка данных для графиков.
 
-Гоняет 4 стратегии (early / smart-trend / smart-rnn / param) на нескольких
+Гоняет стратегии (early / smart_trend / smart_meta / param) на нескольких
 задачах и пишет CSV/JSON в RESULTS_DIR. Отрисовка — plot_early_stopping.py.
+У каждой прогнозной стратегии свой калиброванный штраф — PENALTY_BY_STRAT.
 
     python eval_early_stopping.py            # полный прогон (~4 мин на GPU)
     python eval_early_stopping.py --quick    # быстрый черновой прогон
@@ -32,8 +33,26 @@ RESULTS_DIR = "results"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SEED = 7
 
-PENALTY = 0.03            # EPOCH_PENALTY для smart/param в бенчмарке vs train_size
 FULL_EPOCHS = 140         # длина «полного» прогона (для oracle) и потолок обучения
+
+# Один и тот же EPOCH_PENALTY означает для разных прогнозистов разное (свип fig3):
+#   * бюджет = penalty * horizon, а horizon = 10 у smart_meta и 5 у smart_trend/param;
+#   * линейный тренд оптимистично смещён (over-predict) и потому «тормозит» позже,
+#     чем честный GBM при том же пороге.
+# Поэтому у каждой стратегии свой штраф, откалиброванный по свипу так, чтобы
+# gap до oracle на held-out (MNIST/CIFAR/Wine) держался ~2-3 п.п. при макс.
+# экономии эпох. По типу задачи оптимум чуть разный (reg терпит больший штраф);
+# компромиссные значения ниже, разбор — docs/early_stopping.md.
+PENALTY_BY_STRAT = {
+    "smart_trend": 0.006,
+    "smart_meta":  0.003,
+    "param":       0.010,
+}
+PENALTY = 0.006          # дефолт для стратегий вне таблицы (и старых вызовов)
+
+
+def penalty_for(strat):
+    return PENALTY_BY_STRAT.get(strat, PENALTY)
 
 # Поддерживает ли текущая версия SmartEarlyStoppingMultiStep RNN-прогноз для
 # решения об остановке. В ветке main этого пути нет — там «умная» стратегия
@@ -54,23 +73,29 @@ STRATS = tuple(s for s, ok in (
     ("param", True)) if ok)
 SWEEP_SMART = tuple(s for s, ok in (
     ("smart_trend", True), ("smart_rnn", _SMART_HAS_RNN),
-    ("smart_meta", _SMART_HAS_META)) if ok)
+    ("smart_meta", _SMART_HAS_META), ("param", True)) if ok)
 
 # базовые гиперпараметры MLP, на котором меряем стратегии
 MLP = dict(width=64, depth=2, wd=1e-4, dropout=0.2, lr=1e-3)
 
 # задачи: имя -> (загрузчик из gen_curves, held-out ли для прогнозиста)
 TASKS = {
-    "MNIST":   (lambda: G._img(G.datasets.MNIST), False),
-    "CIFAR10": (lambda: G._img(G.datasets.CIFAR10), True),
-    "Wine":    (G.load_wine_reg, True),
+    "MNIST":      (lambda: G._img(G.datasets.MNIST), False),
+    "CIFAR10":    (lambda: G._img(G.datasets.CIFAR10), True),
+    "Wine":       (G.load_wine_reg, True),
+    "California": (G.load_california, True),   # только для свипа штрафа
 }
 SIZES = {"MNIST": [300, 800, 2000, 5000], "CIFAR10": [500, 2000, 5000],
          "Wine": [300, 600, 850]}
 N_RUNS = 4                                   # повторов на (задача, размер)
 
-SWEEP_TASKS = ("CIFAR10", "Wine")            # на чём свипуем штраф (held-out)
-SWEEP_PENALTIES = [0.002, 0.004, 0.007, 0.012, 0.02, 0.03]
+# свипуем штраф на классификации (MNIST — в обучении прогнозиста; CIFAR10 —
+# held-out) и на регрессии (Wine, held-out), чтобы подобрать отдельный
+# EPOCH_PENALTY для smart_trend / smart_meta / param и для clf / reg.
+# California выпала из свипа: MLP-регрессия там сходится к ~10-й эпохе, раньше
+# min_epochs, поэтому gap == 0 при любом штрафе — тюнить нечего.
+SWEEP_TASKS = ("MNIST", "CIFAR10", "Wine")
+SWEEP_PENALTIES = [0.001, 0.002, 0.003, 0.004, 0.006, 0.009, 0.013, 0.02, 0.03]
 SWEEP_SIZE = 2500
 SWEEP_CFGS = [dict(lr=lr, seed=s) for lr in (1e-3, 3e-4) for s in (0, 1)]
 
@@ -142,11 +167,14 @@ def _callback(strat, penalty):
     return SmartEarlyStoppingMultiStep(epoch_penalty=penalty)
 
 
-def run(data, cfg, strat, penalty=PENALTY, max_epochs=FULL_EPOCHS, bs=128, want_curve=False):
+def run(data, cfg, strat, penalty=None, max_epochs=FULL_EPOCHS, bs=128, want_curve=False):
     """Одно обучение MLP с выбранной стратегией остановки.
 
+    penalty=None -> берётся штраф этой стратегии из PENALTY_BY_STRAT.
     Возвращает: epochs (когда остановились), quality (метрика на лучшем по
     val_loss чекпойнте), oracle (лучшая метрика за весь прогон)."""
+    if penalty is None:
+        penalty = penalty_for(strat)
     Xtr, ytr, Xte, yte, is_clf, out_dim = data
     g = torch.Generator().manual_seed(cfg["seed"])
     idx = torch.randperm(len(Xtr), generator=g)[:cfg["train_size"]].numpy()
@@ -201,6 +229,8 @@ def bench_vs_size(quick):
     rows, t0 = [], time.time()
     n_runs = 2 if quick else N_RUNS
     for tname, (loader, holdout) in TASKS.items():
+        if tname not in SIZES:                   # напр. California — только для свипа штрафа
+            continue
         data = loader()
         for size in SIZES[tname]:
             if size > 0.9 * len(data[0]):
