@@ -100,22 +100,33 @@ MLP на flatten, California housing, Wine quality) → `data/curves_eval.jsonl`
 Train- и eval-задачи **не пересекаются**. Прогнозист обучается только на
 `curves_train.jsonl`, оценивается только на `curves_eval.jsonl`.
 
+Дополнительно подмешаны кривые [LCBench](https://github.com/automl/LCBench) —
+чужой пайплайн (funnel-MLP, SGD + cosine annealing, 52 эпохи) на 35 датасетах
+OpenML: [gen_curves_lcbench.py](gen_curves_lcbench.py) делит их **по задаче**
+на 28 train / 7 held-out → `data/curves_{train,eval}_lcbench.jsonl`.
+`meta_forecaster.py train`/`eval` без флагов уже используют оба источника.
+Подробности и цифры — [docs/variant_c_forecaster.md, §9](docs/variant_c_forecaster.md#9-расширение-lcbench).
+
 ---
 
 ## Результаты
 
 ### 1. Прогнозист vs линейный тренд (held-out задачи)
 
-`python meta_forecaster.py eval` — 39 900 окон из held-out кривых:
+`python meta_forecaster.py eval` — теперь по умолчанию объединяет свой
+held-out (cifar10/california/wine) и 7 held-out задач LCBench, 71 400 окон:
 
 | таргет `relgain` | MAE | R² |
 |---|---|---|
-| **GBM (вариант C)** | **0.0074** | **+0.46** |
-| линейный тренд (baseline) | 0.0241 | −7.8 |
+| **GBM (вариант C)** | **0.0077** | **+0.65** |
+| линейный тренд (baseline) | 0.0353 | −7.1 |
 
-Разбивка по задачам (MAE `relgain`): california 0.015 vs 0.049 · cifar10 0.0037
-vs 0.0084 · wine 0.0037 vs 0.015. GBM стабильно точнее линейного тренда в
-**3–4×** на данных, которых он не видел.
+На своих 3 задачах отдельно (сопоставимо с версией без LCBench, MAE не
+выросла): california 0.015 vs 0.049 · cifar10 0.0029 vs 0.0084 · wine 0.0035
+vs 0.015. GBM стабильно точнее линейного тренда в **3–20×** в зависимости от
+задачи. Полное сравнение до/после LCBench (включая перенос на новые
+архитектуры и влияние на саму стратегию остановки) —
+[docs/variant_c_forecaster.md, §9](docs/variant_c_forecaster.md#9-расширение-lcbench).
 
 `results/fig6_calibration.png` — калибровка прогноза на held-out окнах (тесно у
 нуля, т.е. в зоне, где принимается решение об остановке) и разбор, где именно

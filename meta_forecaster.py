@@ -13,6 +13,10 @@ MNIST-Keras кривые) и предсказывал одношаговое о�
 1. ДАННЫЕ. Кривые берутся из того же PyTorch-пайплайна, что и весь бенчмарк
    (`gen_curves.py` -> `data/curves_train.jsonl`, 500-2000 кривых), а не из
    постороннего `final.csv`. Обучающие и held-out задачи не пересекаются.
+   Дополнительно подмешаны кривые LCBench (`gen_curves_lcbench.py` ->
+   `data/curves_{train,eval}_lcbench.jsonl`) — funnel-MLP + SGD на 35 датасетах
+   OpenML, 28 задач в train / 7 в held-out, разбито по задачам без пересечений
+   (см. `docs/variant_c_forecaster.md`, раздел LCBench).
 
 2. ТАРГЕТ. Вместо одношаговой дельты + авторегрессии модель напрямую
    предсказывает величины, нужные для решения об остановке:
@@ -49,8 +53,8 @@ PLATEAU_EPS = 0.02       # «плато»: best-so-far в пределах EPS*l
 PLATEAU_CAP = 40         # таргет plateau обрезаем сверху этим числом эпох
 STEP = 1                 # шаг по k при нарезке окон из одной кривой
 
-TRAIN_PATH = "data/curves_train.jsonl"
-EVAL_PATH = "data/curves_eval.jsonl"
+TRAIN_PATH = ["data/curves_train.jsonl", "data/curves_train_lcbench.jsonl"]
+EVAL_PATH = ["data/curves_eval.jsonl", "data/curves_eval_lcbench.jsonl"]
 MODEL_PATH = "models/meta_forecaster.pkl"
 MODEL_KIND = "hgb"       # "hgb" (sklearn HistGradientBoosting) или "xgb"
 
@@ -167,13 +171,18 @@ def curve_to_rows(rec):
     return rows
 
 
+def _as_paths(path_or_paths):
+    return [path_or_paths] if isinstance(path_or_paths, str) else list(path_or_paths)
+
+
 def build_dataset(path):
     rows = []
-    with open(path) as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rows.extend(curve_to_rows(json.loads(line)))
+    for p in _as_paths(path):
+        with open(p) as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    rows.extend(curve_to_rows(json.loads(line)))
     df = pd.DataFrame(rows)
     X = df[FEATURES].astype(np.float64)
     return X, df["relgain"], df["plateau"], df["task"].to_numpy()
@@ -211,12 +220,15 @@ def trend_rel_gain(prefix, window=6, future_steps=HORIZON):
 
 # ------------------------------------------------------------------ train / eval
 def train(train_path=TRAIN_PATH, out_path=MODEL_PATH):
-    if not os.path.exists(train_path):
-        sys.exit(f"нет {train_path} — сначала: N_PER_TASK=100 python gen_curves.py")
+    paths = _as_paths(train_path)
+    for p in paths:
+        if not os.path.exists(p):
+            sys.exit(f"нет {p} — сначала: N_PER_TASK=100 python gen_curves.py "
+                     f"(и/или python gen_curves_lcbench.py)")
     import joblib
 
-    X, y_rg, y_pl, groups = build_dataset(train_path)
-    n_curves = sum(1 for _ in open(train_path))
+    X, y_rg, y_pl, groups = build_dataset(paths)
+    n_curves = sum(sum(1 for _ in open(p)) for p in paths)
     print(f"train: {n_curves} кривых -> {len(X)} окон, {X.shape[1]} признаков, "
           f"{len(set(groups))} задач: {sorted(set(groups))}")
 
@@ -277,24 +289,27 @@ def predict_plateau(prefix, path=MODEL_PATH):
 def evaluate(model_path=MODEL_PATH, eval_path=EVAL_PATH):
     if not os.path.exists(model_path):
         sys.exit(f"нет {model_path} — сначала: python meta_forecaster.py train")
-    if not os.path.exists(eval_path):
-        sys.exit(f"нет {eval_path}")
+    paths = _as_paths(eval_path)
+    for p in paths:
+        if not os.path.exists(p):
+            sys.exit(f"нет {p}")
     b = load_meta(model_path)
-    X, y_rg, y_pl, groups = build_dataset(eval_path)
-    print(f"\nHELD-OUT eval: {eval_path}  ({len(X)} окон, задачи {sorted(set(groups))})")
+    X, y_rg, y_pl, groups = build_dataset(paths)
+    print(f"\nHELD-OUT eval: {paths}  ({len(X)} окон, задачи {sorted(set(groups))})")
 
     pred_rg = np.clip(b["relgain"].predict(X), 0.0, 1.0)
     pred_pl = np.clip(b["plateau"].predict(X), 0.0, PLATEAU_CAP)
 
     # baseline: линейный тренд по тем же префиксам (пересобираем из сырых кривых)
     trend_rg = []
-    for line in open(eval_path):
-        rec = json.loads(line)
-        v = np.asarray(rec["val_loss"], dtype=np.float64)
-        if len(v) < PREFIX_MIN + 3:
-            continue
-        for k in range(PREFIX_MIN, len(v) - 2, STEP):
-            trend_rg.append(trend_rel_gain(v[:k]))
+    for p in paths:
+        for line in open(p):
+            rec = json.loads(line)
+            v = np.asarray(rec["val_loss"], dtype=np.float64)
+            if len(v) < PREFIX_MIN + 3:
+                continue
+            for k in range(PREFIX_MIN, len(v) - 2, STEP):
+                trend_rg.append(trend_rel_gain(v[:k]))
     trend_rg = np.asarray(trend_rg[:len(y_rg)])
 
     print("\n  -- relgain (ещё доступное относит. улучшение за 10 эпох) --")
