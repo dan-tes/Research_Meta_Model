@@ -22,19 +22,20 @@ plt.rcParams.update({"figure.dpi": 110, "font.size": 10, "axes.grid": True,
 COL = {"early": "#666666", "smart_trend": "#1f77b4",
        "smart_meta": "#9467bd", "param": "#2ca02c"}
 MRK = {"early": "o", "smart_trend": "s", "smart_meta": "P", "param": "D"}
-# Обобщённые метки: не привязаны к конкретному механизму прогноза. «Умная»
-# стратегия по линейному тренду подписана просто «Smart»; smart_meta
-# встречается только там, где обучен табличный GBM-прогнозист (вариант C).
-LBL = {"early": "Early stopping", "smart_trend": "Smart (trend)",
-       "smart_meta": "Smart (GBM)", "param": "Parametric"}
-SHORT = {"early": "early", "smart_trend": "smart",
-         "smart_meta": "s-gbm", "param": "param"}
+# Понятные без документации подписи для легенд: явно называем механизм
+# прогноза (линейный тренд / GBM / экспоненциальная модель), не кодовые имена.
+LBL = {"early": "Ранняя остановка (по терпению)",
+       "smart_trend": "Умная (линейный прогноз)",
+       "smart_meta": "Умная (GBM-прогноз)",
+       "param": "Параметрическая (экспоненциальная модель)"}
+SHORT = {"early": "ранняя", "smart_trend": "линейная",
+         "smart_meta": "GBM", "param": "эксп."}
 STRATS = ["early", "smart_trend", "smart_meta", "param"]
 
 # Прогнозисты кривой для fig4/fig5: (цвет, маркер, подпись).
 FC_STYLE = {
-    "trend": (COL["smart_trend"], "s", "линейный тренд (текущий)"),
-    "param": (COL["param"], "D", "параметрический (exp-fit)"),
+    "trend": (COL["smart_trend"], "s", "линейный прогноз"),
+    "param": (COL["param"], "D", "параметрическая модель (экспоненциальная)"),
 }
 
 
@@ -73,7 +74,7 @@ def fig_vs_size(D, out):
         ax[i, 1].set_title(f"{t} — итоговое качество ({metric})")
         ax[i, 0].set_ylabel("эпохи"); ax[i, 1].set_ylabel(metric)
         for c in (0, 1):
-            ax[i, c].set_xlabel("train_size")
+            ax[i, c].set_xlabel("размер обучающей выборки")
     ax[0, 0].legend(fontsize=8)
     ax[0, 1].legend(fontsize=8, loc="lower right")
     fig.suptitle("Стратегии остановки vs размер обучающей выборки", fontweight="bold")
@@ -96,11 +97,14 @@ def fig_tradeoff(D, out):
             ax[0, j].scatter(d.epochs, d.gap, s=85, color=COL[strat], marker=MRK[strat],
                              label=LBL[strat], edgecolor="w", lw=.6, alpha=.85, zorder=3)
         ax[0, j].axhline(0, color="k", lw=.8)
+        xs = np.linspace(sub.epochs.min(), sub.epochs.max(), 50)
+        thresh = 0.07 - 0.0015 * xs
+        ax[0, j].plot(xs, thresh, ":", color="crimson", lw=1.6, zorder=2,
+                      label="допустимая потеря качества" if j == 0 else None)
         ax[0, j].set_title(t); ax[0, j].set_xlabel("эпохи (меньше = быстрее)")
         ax[0, j].set_ylabel("потеря качества до oracle")
-        ax[0, j].invert_yaxis()
     ax[0, 0].legend(fontsize=8)
-    fig.suptitle("Компромисс скорость / качество: левый-верхний угол — идеал", fontweight="bold")
+    fig.suptitle("Компромисс скорость / качество: левый-нижний угол — идеал", fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, .95])
     fig.savefig(f"{out}/fig2_tradeoff.png"); plt.close(fig)
 
@@ -121,7 +125,7 @@ def fig_sweep(D, out):
         ax[1, j].axhline(early.oracle - early.q, color=COL["early"], ls="--", label="early")
         pens = sorted(sub[sub.strat == "smart_trend"].penalty.dropna().unique())
         for r in (0, 1):
-            ax[r, j].set_xscale("log"); ax[r, j].set_xlabel("EPOCH_PENALTY")
+            ax[r, j].set_xscale("log"); ax[r, j].set_xlabel("штраф за лишнюю эпоху")
             ax[r, j].set_xticks(pens); ax[r, j].set_xticklabels([f"{p:g}" for p in pens], fontsize=8)
             ax[r, j].minorticks_off()
         ax[0, j].set_title(f"{t} — эпохи vs штраф"); ax[1, j].set_title(f"{t} — gap vs штраф")
@@ -146,7 +150,7 @@ def fig_forecast(D, out):
         ax[0, j].set_title(t); ax[0, j].set_xlabel("шаг прогноза вперёд")
         ax[0, j].set_ylabel("rel. MAE (в долях val_loss[0])")
     ax[0, 0].legend(fontsize=9)
-    fig.suptitle("Точность прогноза кривой на HELD-OUT задачах: текущий метод vs параметрический",
+    fig.suptitle("Точность прогноза кривой на HELD-OUT задачах: линейный прогноз vs параметрическая модель",
                  fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, .93])
     fig.savefig(f"{out}/fig4_forecast.png"); plt.close(fig)
@@ -189,8 +193,8 @@ def fig_examples(D, out):
 
 
 def fig_calibration(D, out):
-    """fig6 — ядро варианта C: калибровка GBM-прогноза `relgain` на HELD-OUT
-    кривых и как ошибка растёт с зашумлённостью кривой.
+    """fig6 — калибровка GBM-прогноза «сколько улучшения ещё осталось»
+    (`relgain`) на HELD-OUT кривых и как ошибка растёт с зашумлённостью кривой.
 
     A: предсказанное vs истинное ещё-доступное улучшение за 10 эпох (диагональ —
        идеал), точки по held-out окнам, цвет — задача.
@@ -243,14 +247,14 @@ def fig_calibration(D, out):
     xs = np.arange(len(lbl))
     g_err = [np.abs(pred_g - y)[gi == i].mean() if (gi == i).any() else np.nan for i in xs]
     t_err = [np.abs(trend_g - y)[gi == i].mean() if (gi == i).any() else np.nan for i in xs]
-    ax[1].bar(xs - .19, g_err, .38, color=COL["smart_meta"], label="GBM (вариант C)")
-    ax[1].bar(xs + .19, t_err, .38, color=COL["smart_trend"], label="линейный тренд")
+    ax[1].bar(xs - .19, g_err, .38, color=COL["smart_meta"], label="GBM-прогноз")
+    ax[1].bar(xs + .19, t_err, .38, color=COL["smart_trend"], label="линейный прогноз")
     ax[1].set_xticks(xs); ax[1].set_xticklabels(lbl)
     ax[1].set_xlabel("смен знака Δval_loss за 8 эпох   (0 = кривая ещё гладко падает)")
     ax[1].set_ylabel("средняя |ошибка| прогноза relgain")
     ax[1].set_title("B. Провал линейного тренда — гладко-падающие\nкривые; GBM устойчив везде")
     ax[1].legend(fontsize=9)
-    fig.suptitle("Вариант C: прогнозист «сколько улучшения ещё осталось» (held-out задачи)",
+    fig.suptitle("GBM-прогнозист «сколько улучшения ещё осталось» (held-out задачи)",
                  fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, .93])
     fig.savefig(f"{out}/fig6_calibration.png"); plt.close(fig)
@@ -295,7 +299,7 @@ def fig_headline(D, out):
     ax.set_xlabel("эпохи обучения  (доля от early — влево = быстрее)")
     ax.set_ylabel("потеря качества до oracle  (доля oracle — вверх = хуже)")
     ax.set_title("Итог: экономия эпох против цены по качеству\n"
-                 "каждая стратегия при своём штрафе (PENALTY_BY_STRAT); ↙ угол — идеал",
+                 "у каждой стратегии свой штраф за лишнюю эпоху; ↙ угол — идеал",
                  fontweight="bold")
     ax.legend(fontsize=8, loc="lower left")
     fig.tight_layout()
