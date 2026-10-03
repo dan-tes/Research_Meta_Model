@@ -82,6 +82,9 @@ def fig_vs_size(D, out):
     fig.savefig(f"{out}/fig1_vs_size.png"); plt.close(fig)
 
 
+TRADEOFF_EDGE_EPOCH = 30  # порог упирается в 0 на этой эпохе: дальше обучать нельзя
+
+
 def fig_tradeoff(D, out):
     df = pd.read_csv(f"{D}/bench_vs_size.csv")
     tasks = _tasks(df)
@@ -97,8 +100,8 @@ def fig_tradeoff(D, out):
             ax[0, j].scatter(d.epochs, d.gap, s=85, color=COL[strat], marker=MRK[strat],
                              label=LBL[strat], edgecolor="w", lw=.6, alpha=.85, zorder=3)
         ax[0, j].axhline(0, color="k", lw=.8)
-        xs = np.linspace(sub.epochs.min(), sub.epochs.max(), 50)
-        thresh = 0.07 - 0.0015 * xs
+        xs = np.linspace(sub.epochs.min(), min(sub.epochs.max(), TRADEOFF_EDGE_EPOCH), 50)
+        thresh = 0.07 * (1 - xs / TRADEOFF_EDGE_EPOCH)
         ax[0, j].plot(xs, thresh, ":", color="crimson", lw=1.6, zorder=2,
                       label="допустимая потеря качества" if j == 0 else None)
         ax[0, j].set_title(t); ax[0, j].set_xlabel("эпохи (меньше = быстрее)")
@@ -192,17 +195,10 @@ def fig_examples(D, out):
     fig.savefig(f"{out}/fig5_examples.png"); plt.close(fig)
 
 
-def fig_calibration(D, out):
-    """fig6 — калибровка GBM-прогноза «сколько улучшения ещё осталось»
-    (`relgain`) на HELD-OUT кривых и как ошибка растёт с зашумлённостью кривой.
-
-    A: предсказанное vs истинное ещё-доступное улучшение за 10 эпох (диагональ —
-       идеал), точки по held-out окнам, цвет — задача.
-    B: средняя |ошибка| прогноза в зависимости от числа смен знака дельты
-       val_loss на последних 8 эпохах. Мало смен знака = кривая ещё гладко
-       падает — именно там линейный тренд экстраполирует наклон слишком далеко
-       и промахивается в разы; GBM держит ошибку ровной.
-    """
+def _calibration_data():
+    """Общие вычисления для fig6 (панели A и B): прогноз GBM и линейного
+    тренда relgain на held-out окнах + число смен знака Δval_loss за 8 эпох
+    (мера зашумлённости кривой в этом окне)."""
     import json as _json
 
     import meta_forecaster as MF
@@ -222,6 +218,21 @@ def fig_calibration(D, out):
 
     y = y_rg.to_numpy()
     noise = X["sign_changes_8"].to_numpy()
+    return y, pred_g, trend_g, noise, groups
+
+
+def fig_calibration(D, out):
+    """fig6 — калибровка GBM-прогноза «сколько улучшения ещё осталось»
+    (`relgain`) на HELD-OUT кривых и как ошибка растёт с зашумлённостью кривой.
+
+    A: предсказанное vs истинное ещё-доступное улучшение за 10 эпох (диагональ —
+       идеал), точки по held-out окнам, цвет — задача.
+    B: средняя |ошибка| прогноза в зависимости от числа смен знака дельты
+       val_loss на последних 8 эпохах. Мало смен знака = кривая ещё гладко
+       падает — именно там линейный тренд экстраполирует наклон слишком далеко
+       и промахивается в разы; GBM держит ошибку ровной.
+    """
+    y, pred_g, trend_g, noise, groups = _calibration_data()
     fig, ax = plt.subplots(1, 2, figsize=(12, 4.6))
 
     tasks = sorted(set(groups))
@@ -258,6 +269,32 @@ def fig_calibration(D, out):
                  fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, .93])
     fig.savefig(f"{out}/fig6_calibration.png"); plt.close(fig)
+
+
+def fig_calibration_b(D, out):
+    """Панель B из fig6 отдельным файлом (results/fig6b_calibration_error.png):
+    средняя |ошибка| прогноза relgain в зависимости от числа смен знака
+    Δval_loss за 8 эпох."""
+    y, pred_g, trend_g, noise, _ = _calibration_data()
+    fig, ax = plt.subplots(figsize=(6.4, 4.6))
+
+    bins = [0, 1, 2, 3, 8]
+    lbl = ["0", "1", "2", "3", "4+"]
+    gi = np.digitize(noise, bins) - 1
+    gi = np.clip(gi, 0, len(lbl) - 1)
+    xs = np.arange(len(lbl))
+    g_err = [np.abs(pred_g - y)[gi == i].mean() if (gi == i).any() else np.nan for i in xs]
+    t_err = [np.abs(trend_g - y)[gi == i].mean() if (gi == i).any() else np.nan for i in xs]
+    ax.bar(xs - .19, g_err, .38, color=COL["smart_meta"], label="GBM-прогноз")
+    ax.bar(xs + .19, t_err, .38, color=COL["smart_trend"], label="линейный прогноз")
+    ax.set_xticks(xs); ax.set_xticklabels(lbl)
+    ax.set_xlabel("смен знака Δval_loss за 8 эпох   (0 = кривая ещё гладко падает)")
+    ax.set_ylabel("средняя |ошибка| прогноза relgain")
+    ax.set_title("Провал линейного тренда — гладко-падающие кривые;\nGBM устойчив везде",
+                 fontweight="bold")
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(f"{out}/fig6b_calibration_error.png"); plt.close(fig)
 
 
 def fig_headline(D, out):
@@ -308,7 +345,7 @@ def fig_headline(D, out):
 
 FIGS = {"fig1": fig_vs_size, "fig2": fig_tradeoff, "fig3": fig_sweep,
         "fig4": fig_forecast, "fig5": fig_examples,
-        "fig6": fig_calibration, "fig7": fig_headline}
+        "fig6": fig_calibration, "fig6b": fig_calibration_b, "fig7": fig_headline}
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gbm-early-stopping"
+version = "0.1.0"
+description = "GBM-прогнозист остаточного улучшения val_loss для ранней остановки обучения в PyTorch"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "scikit-learn>=1.2",
+    "joblib>=1.2",
+]
+
+[project.optional-dependencies]
+lightning = ["pytorch-lightning>=2.0"]
+keras = ["tensorflow>=2.12"]
+xgboost = ["xgboost>=1.7"]
+dev = ["pytest>=7.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gbm_early_stopping"]
